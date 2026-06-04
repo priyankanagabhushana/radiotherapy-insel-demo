@@ -30,8 +30,7 @@ brats_data/
 *.nii.gz
 *.nii.zip
 
-# ── Generated Reports (regenerate with: python generate_report.py) ──
-neuroqa_report.html
+# ── Temp ─────────────────────────────────────────────────────────────
 /tmp/
 
 # ── Jupyter ──────────────────────────────────────────────────────────
