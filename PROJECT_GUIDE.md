@@ -28,8 +28,8 @@ A simple set of rules automatically assigns a risk level to each patient:
 
 | Risk Level | What triggers it |
 |------------|-----------------|
-| 🔴 **HIGH** | The AI was very unsure (score > 0.70) OR the tumor is dangerously close (< 3mm) to a critical structure |
-| 🟡 **MODERATE** | The AI was somewhat unsure (score > 0.55) OR the tumor is nearby (< 6mm) |
+| 🔴 **HIGH** | The AI was very unsure (score > 0.75) OR the tumor is dangerously close (< 3mm) to a critical structure |
+| 🟡 **MODERATE** | The AI was somewhat unsure (score > 0.50) OR the tumor is large (> 25 cc) |
 | 🟢 **LOW** | Everything looks safe |
 
 ### Step 3: The Copilot (RAG System)
@@ -44,80 +44,82 @@ For each flagged patient, the system searches a **knowledge base** of real clini
 It pulls the most relevant guideline excerpts and generates a **recommended action list** — telling the physicist exactly what to double-check.
 
 ### Step 4: MRI Visualisation
-For patients where we have the actual MRI scan files, the system renders the brain scan with a **color overlay** showing where the AI thinks the tumor is:
+For each patient, pre-rendered MRI scans are shown with a **color overlay** controlled by an opacity slider:
 
 - 🔴 **Red** = Tumor Core (the dangerous part)
 - 🔵 **Blue** = Edema (swelling around the tumor)
 - 🟡 **Yellow** = Enhancing Tumor (actively growing)
 
-This lets the reviewer visually confirm whether the AI's outline looks reasonable.
+Three views are shown side-by-side: **axial**, **coronal**, and **sagittal**. Each supports **scroll-to-zoom** and **drag-to-pan** via Plotly. The MRI data is stored as lightweight PNGs (5.1 MB total) rather than the original NIfTI files (4.2 GB).
 
-### Step 5: Report Generation
-The system can produce two types of output:
+### Step 5: Statistical Analysis
+The Group Statistics tab provides 10 statistical methods:
 
-1. **Interactive Web App** (Streamlit) — A dashboard you can open in your browser, click through patients, view MRI scans, and generate copilot reviews
-2. **HTML Report** — A single self-contained file (with MRI images embedded) that can be emailed to colleagues or opened on any computer without installing software
+- Descriptive statistics (mean, median, std, skewness, kurtosis)
+- Distribution fitting (Normal / LogNormal / Gamma)
+- Correlation matrix (Spearman with significance stars)
+- Group comparisons (Kruskal-Wallis)
+- Risk factor analysis (Cliff's delta forest plot)
+- Bootstrap confidence intervals (10K resamples)
+- Outlier detection (IQR method)
+- Power analysis (minimum detectable effect)
+
+### Step 6: PDF Report Generation
+The system produces two types of PDF reports:
+
+1. **Patient Report** — percentile bar charts, MRI previews, risk triggers, cohort comparison, recommended actions
+2. **Group Report** — pie chart, descriptive stats, box plots, correlation heatmap, forest plot, full patient list
+
+All reports are generated with `fpdf2` (pure Python) — no system dependencies needed.
 
 ---
 
 ## The Files Explained
 
-Here's what each file in the project does:
-
-| File | What it does | Who needs it |
-|------|-------------|--------------|
-| `app.py` | The main web dashboard (Streamlit). This is what you launch with `streamlit run app.py`. | Everyone — this is the main interface |
-| `generate_report.py` | Creates a standalone HTML report with MRI images baked in. Run with `python generate_report.py`. | Anyone who needs a shareable report file |
-| `mri_viewer.py` | Reads MRI brain scans (NIfTI format) and draws the tumor segmentation overlay on top. | Used internally by the other scripts |
-| `knowledge_base.py` | Contains all the clinical guideline text (from AAPM, ESTRO, etc.) that the copilot searches through. | Used internally by `app.py` |
-| `extract_real_cases.py` | One-time script that extracts patient data from the BraTS dataset into the CSV file. | Only if you need to rebuild the CSV |
-| `generate_cases.py` | Creates synthetic (fake) patient data for testing. | Only for development/testing |
-| `generate_brats_nifti.py` | Creates synthetic MRI scan files for testing. | Only for development/testing |
-| `real_clinical_queue.csv` | The actual patient data (50 rows). Each row has: patient ID, structure name, tumor volume, distance to OAR, AI uncertainty score. | Core data file — needed by everything |
-| `clinical_queue.csv` | Synthetic patient data (for testing). | Only for development |
-| `neuroqa_report.html` | The generated HTML report. Open in any browser. | Anyone who wants the standalone report |
-| `requirements.txt` | List of Python packages needed to run the project. | Everyone — `pip install -r requirements.txt` |
+| File | What it does |
+|------|-------------|
+| `app.py` | Main Streamlit dashboard. Launch with `streamlit run app.py`. |
+| `mri_viewer.py` | Loads MRI PNGs + segmentation masks, creates Plotly charts with scroll-to-zoom. |
+| `pdf_report.py` | Generates PDF reports with embedded charts, MRI previews, and tables. |
+| `stats_analysis.py` | 10 statistical analysis functions (descriptive stats, correlations, bootstrap, etc.). |
+| `knowledge_base.py` | Clinical guideline knowledge base (9 entries from AAPM, ESTRO, QUANTEC, ASTRO, NRG). |
+| `render_mri_slices.py` | Regenerates MRI PNGs + mask PNGs + YOLO-Seg contours from NIfTI data. |
+| `extract_real_cases.py` | Extracts patient data from BraTS 2020 dataset into CSV. |
+| `generate_report.py` | Legacy HTML report generator (replaced by `pdf_report.py`). |
+| `real_clinical_queue.csv` | Patient data for 50 patients. Core data file. |
+| `mri_previews/` | Pre-rendered MRI PNGs, mask PNGs, and YOLO-Seg contour files (5.1 MB). |
+| `reports/` | Sample PDF reports for portfolio/demo. |
+| `screenshots/` | App screenshots and demo video. |
+| `.streamlit/config.toml` | Dark theme configuration. |
+| `requirements.txt` | Python dependencies. |
 
 ---
 
 ## The Data Flow
 
 ```
-BraTS 2020 MRI Scans (NIfTI files)
+BraTS 2020 MRI Scans (NIfTI, 4.2 GB)
          │
          ▼
-   extract_real_cases.py
+   render_mri_slices.py
          │
          ▼
-   real_clinical_queue.csv ──────────┐
-         │                          │
-         ▼                          ▼
-     app.py                   generate_report.py
-   (Streamlit)                    │
-         │                        ▼
-         ▼                 neuroqa_report.html
-   http://localhost:8501    (open in browser)
+   mri_previews/ (PNGs, 5.1 MB)  ──────┐
+         │                              │
+         ▼                              ▼
+   real_clinical_queue.csv          app.py
+         │                         (Streamlit)
+         │                              │
+         ├──► pdf_report.py             ├──► Patient Queue (pie chart + table)
+         │         │                    ├──► Patient Review (MRI + metrics + PDF)
+         │         ▼                    ├──► Group Statistics (charts + stats)
+         │    PDF reports               └──► Clinical Reference (guidelines)
+         │
+         └──► stats_analysis.py
+                    │
+                    ▼
+              Statistical tables + charts
 ```
-
----
-
-## What is RAG?
-
-**RAG** stands for **Retrieval-Augmented Generation**. In our project:
-
-1. **Retrieval** — When a patient is flagged, the system searches the knowledge base (`knowledge_base.py`) for the most relevant clinical guideline. For example, if a tumor is 1.5mm from the optic chiasm, it retrieves the AAPM TG-132 guideline about optic chiasm proximity.
-
-2. **Augmented** — The retrieved guideline text is combined with the patient's specific data (tumor size, distance, uncertainty score).
-
-3. **Generation** — The system produces a structured review report that includes the guideline recommendation, the patient's specific risk factors, and a prioritized action list.
-
-In a production system, this would use a real Large Language Model (like GPT-4). In this research prototype, the "generation" step uses template-based text to demonstrate the workflow without requiring an LLM API.
-
----
-
-## What is NIfTI?
-
-NIfTI (Neuroimaging Informatics Technology Initiative) is the standard file format for brain scans. A NIfTI file (`.nii` or `.nii.gz`) contains a 3D volume of the brain — like stacking hundreds of thin MRI slices into a cube. Our `mri_viewer.py` reads these 3D volumes and displays a 2D slice with the tumor overlay.
 
 ---
 
@@ -126,9 +128,9 @@ NIfTI (Neuroimaging Informatics Technology Initiative) is the standard file form
 | Threshold | Value | Why this number? |
 |-----------|-------|-----------------|
 | Distance to OAR < 3mm | HIGH risk | 3mm is the typical planning margin. If the tumor is closer than this, even a tiny contour error could irradiate the critical structure. |
-| AI Uncertainty > 0.70 | HIGH risk | At this level, the AI model has significant doubt about its own contour. Published research shows error rates increase sharply above 0.70. |
-| AI Uncertainty > 0.55 | MODERATE risk | The AI is somewhat unsure. A spot-check review is recommended but not mandatory. |
-| Tumor Volume > 100cc | Trigger only | Large tumors have irregular shapes that AI struggles with. This doesn't automatically assign HIGH risk but triggers a volume alert. |
+| AI Uncertainty > 0.75 | HIGH risk | At this level, the AI model has significant doubt about its own contour. |
+| AI Uncertainty > 0.50 | MODERATE risk | The AI is somewhat unsure. A spot-check review is recommended. |
+| Tumor Volume > 25cc | MODERATE trigger | Large tumors have irregular shapes that AI struggles with. |
 
 ---
 
@@ -136,28 +138,22 @@ NIfTI (Neuroimaging Informatics Technology Initiative) is the standard file form
 
 ### First time setup
 ```bash
-# Clone the repository
-git clone https://github.com/YOUR_USERNAME/radiotherapy-qa-copilot.git
+git clone https://github.com/priyankanagabhushana/radiotherapy-qa-copilot.git
 cd radiotherapy-qa-copilot
-
-# Install Python dependencies
 pip install -r requirements.txt
 ```
 
-### Launch the interactive dashboard
+### Launch the dashboard
 ```bash
 streamlit run app.py
 ```
-Then open `http://localhost:8501` in your browser.
+Then open `http://localhost:8501`. The Patient Queue tab opens first.
 
-### Generate the HTML report
+### Regenerate MRI previews (optional)
+Download BraTS 2020 from Kaggle, place in `data/`, then:
 ```bash
-python generate_report.py
+python render_mri_slices.py
 ```
-This creates `neuroqa_report.html`. Double-click it to open in your browser.
-
-### Enable MRI images (optional)
-Download the BraTS 2020 dataset from Kaggle and place the patient folders in `brats_real/`. The MRI viewer will automatically find and display them.
 
 ---
 
@@ -174,6 +170,6 @@ Download the BraTS 2020 dataset from Kaggle and place the patient folders in `br
 
 - This is a **research prototype**, not a medical device
 - The LLM copilot uses template-based text, not a real language model
-- Only 10 of the 50 patients have actual MRI scan files; the rest show "No MRI data available"
+- All 50 patients have MRI previews (pre-rendered from BraTS 2020)
 - All risk thresholds are configurable and should be validated by each institution
 - **Never use auto-segmented contours without human verification**

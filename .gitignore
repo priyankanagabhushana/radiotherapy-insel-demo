@@ -20,7 +20,11 @@ env/
 *.swp
 *.swo
 *~
+
+# ── OS ───────────────────────────────────────────────────────────────
 .DS_Store
+.AppleDouble
+.LSOverride
 Thumbs.db
 
 # ── Large MRI Data (BraTS NIfTI files — multi-GB) ───────────────────
@@ -31,16 +35,7 @@ brats_data/
 *.nii.gz
 *.nii.zip
 
-# ── Temp ─────────────────────────────────────────────────────────────
-/tmp/
-
-# ── Jupyter ──────────────────────────────────────────────────────────
-.ipynb_checkpoints/
-
-# ── OS ───────────────────────────────────────────────────────────────
-.DS_Store
-.AppleDouble
-.LSOverride
+# ── Legacy / Generated ──────────────────────────────────────────────
 neuroqa_report.html
-pre_render_mri.py
-stats_analysis copy.py
+/tmp/
+.ipynb_checkpoints/
