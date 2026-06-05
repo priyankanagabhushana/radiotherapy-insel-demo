@@ -20,6 +20,7 @@ SEG_LABELS = {1: "Tumor Core (Necrosis)", 2: "Edema (Swelling)", 4: "Enhancing T
 def _find_nifti_files(patient_id, base_dirs=None):
     if base_dirs is None:
         base_dirs = [
+            os.path.join(os.path.dirname(__file__), "data"),
             os.path.join(os.path.dirname(__file__), "brats_real"),
             os.path.join(os.path.dirname(__file__), "brats_data"),
         ]
@@ -31,7 +32,7 @@ def _find_nifti_files(patient_id, base_dirs=None):
             d_path = os.path.join(base, d)
             if not os.path.isdir(d_path):
                 continue
-            if patient_id in d:
+            if patient_id.lower() in d.lower() or d.lower() in patient_id.lower():
                 flair = None
                 t1ce = None
                 seg = None
@@ -56,7 +57,7 @@ def _get_tumor_center_slice(seg_data):
     return coords.mean(axis=0).astype(int)
 
 
-def _make_overlay(seg_slice):
+def _make_overlay(seg_slice, alpha=0.55):
     h, w = seg_slice.shape
     rgba = np.zeros((h, w, 4), dtype=np.float32)
     for label, color in SEG_COLORS.items():
@@ -65,7 +66,7 @@ def _make_overlay(seg_slice):
             rgba[mask, 0] = color[0]
             rgba[mask, 1] = color[1]
             rgba[mask, 2] = color[2]
-            rgba[mask, 3] = 0.55
+            rgba[mask, 3] = alpha
     return rgba
 
 
@@ -73,15 +74,22 @@ def _draw_contours(ax, seg_slice):
     for label, color in SEG_COLORS.items():
         mask = seg_slice == label
         if mask.any():
-            eroded = binary_erosion(mask)
+            padded = np.pad(mask, 1, mode='constant', constant_values=False)
+            eroded = binary_erosion(padded)
+            eroded = eroded[1:-1, 1:-1]
             boundary = mask & ~eroded
-            ys, xs = np.where(boundary)
-            if len(xs) > 0:
-                ax.scatter(xs, ys, c=[color], s=0.3, alpha=0.9,
-                           marker='.', linewidths=0)
+            boundary_float = boundary.astype(float)
+            try:
+                ax.contour(boundary_float, levels=[0.5], colors=[color],
+                           linewidths=1.2, origin='lower')
+            except Exception:
+                ys, xs = np.where(boundary)
+                if len(xs) > 0:
+                    ax.scatter(xs, ys, c=[color], s=0.5, alpha=0.9,
+                               marker='.', linewidths=0)
 
 
-def render_mri_with_overlay(patient_id, plane="axial"):
+def render_mri_with_overlay(patient_id, plane="axial", overlay_opacity=0.55):
     mri_path, seg_path = _find_nifti_files(patient_id)
     if mri_path is None:
         return None
@@ -117,7 +125,7 @@ def render_mri_with_overlay(patient_id, plane="axial"):
     if p_high > p_low:
         mri_slice = (mri_slice - p_low) / (p_high - p_low)
 
-    overlay_rgba = _make_overlay(seg_slice)
+    overlay_rgba = _make_overlay(seg_slice, alpha=overlay_opacity)
 
     fig, ax = plt.subplots(1, 1, figsize=(6, 6), facecolor="#0f172a")
     ax.set_facecolor("#0f172a")
@@ -161,13 +169,85 @@ def render_mri_with_overlay(patient_id, plane="axial"):
     return buf
 
 
-def render_all_planes(patient_id):
+def render_all_planes(patient_id, overlay_opacity=0.55):
     results = {}
     for plane in ["axial", "coronal", "sagittal"]:
-        buf = render_mri_with_overlay(patient_id, plane)
+        buf = render_mri_with_overlay(patient_id, plane, overlay_opacity=overlay_opacity)
         if buf:
             results[plane] = buf
     return results
+
+
+def render_combined_view(patient_id, overlay_opacity=0.55):
+    """Render all 3 planes (axial, coronal, sagittal) in a single figure."""
+    mri_path, seg_path = _find_nifti_files(patient_id)
+    if mri_path is None:
+        return None
+
+    mri_img = nib.load(mri_path)
+    seg_img = nib.load(seg_path)
+    mri_data = mri_img.get_fdata()
+    seg_data = seg_img.get_fdata()
+    center = _get_tumor_center_slice(seg_data)
+
+    planes = {
+        "Axial": (2, lambda s: (mri_data[:, :, s], seg_data[:, :, s]),
+                  min(center[2], mri_data.shape[2] - 1)),
+        "Coronal": (1, lambda s: (mri_data[:, s, :], seg_data[:, s, :]),
+                    min(center[1], mri_data.shape[1] - 1)),
+        "Sagittal": (0, lambda s: (mri_data[s, :, :], seg_data[s, :, :]),
+                     min(center[0], mri_data.shape[0] - 1)),
+    }
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6), facecolor="#0f172a")
+
+    for ax, (name, (axis_idx, slicer, slc)) in zip(axes, planes.items()):
+        ax.set_facecolor("#0f172a")
+        mri_slice, seg_slice = slicer(slc)
+
+        # Normalize MRI
+        brain_mask = mri_slice > 0
+        if brain_mask.any():
+            pl, ph = np.percentile(mri_slice[brain_mask], 1), np.percentile(mri_slice[brain_mask], 99)
+        else:
+            pl, ph = 0, 1
+        mri_slice = np.clip(mri_slice, pl, ph)
+        if ph > pl:
+            mri_slice = (mri_slice - pl) / (ph - pl)
+
+        overlay_rgba = _make_overlay(seg_slice, alpha=overlay_opacity)
+        ax.imshow(mri_slice, cmap="gray", origin="lower", interpolation="bilinear")
+        ax.imshow(overlay_rgba, origin="lower", interpolation="nearest")
+        _draw_contours(ax, seg_slice)
+
+        tumor_types = []
+        if np.any(seg_slice == 1):
+            tumor_types.append("Core")
+        if np.any(seg_slice == 2):
+            tumor_types.append("Edema")
+        if np.any(seg_slice == 4):
+            tumor_types.append("Enhancing")
+        tumor_str = ", ".join(tumor_types) if tumor_types else "None"
+
+        ax.set_title(f"{name}  |  Tumor: {tumor_str}", color="white", fontsize=12, pad=8)
+        ax.axis("off")
+
+    # Single shared legend
+    legend_patches = [
+        mpatches.Patch(facecolor=SEG_COLORS[l], edgecolor="white",
+                       linewidth=0.5, alpha=0.7, label=SEG_LABELS[l])
+        for l in SEG_LABELS
+    ]
+    fig.legend(handles=legend_patches, loc="lower center", ncol=3,
+               fontsize=9, facecolor="#1e293b", edgecolor="#334155",
+               labelcolor="white", framealpha=0.9, bbox_to_anchor=(0.5, -0.02))
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=150, bbox_inches="tight",
+                pad_inches=0.1, facecolor="#0f172a")
+    plt.close(fig)
+    buf.seek(0)
+    return buf
 
 
 def has_nifti_data(patient_id):
